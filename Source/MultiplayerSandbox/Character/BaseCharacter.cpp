@@ -5,6 +5,7 @@
 #include "Components/WidgetComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "MultiplayerSandbox/Weapon/Weapon.h"
+#include "MultiplayerSandbox/CharacterComponents/CombatComponent.h"
 
 
 ABaseCharacter::ABaseCharacter()
@@ -26,6 +27,11 @@ ABaseCharacter::ABaseCharacter()
 
 	OverheadWidget = CreateDefaultSubobject<UWidgetComponent>(TEXT("OverheadWidget"));
 	OverheadWidget->SetupAttachment(RootComponent);
+
+	Combat = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
+	Combat->SetIsReplicated(true);
+
+	GetCharacterMovement()->NavAgentProps.bCanCrouch = true;
 }
 
 void ABaseCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -56,6 +62,20 @@ void ABaseCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindAxis("MoveRight", this, &ABaseCharacter::MoveRight);
 	PlayerInputComponent->BindAxis("Turn", this, &ABaseCharacter::Turn);
 	PlayerInputComponent->BindAxis("LookUp", this, &ABaseCharacter::LookUp);
+
+	PlayerInputComponent->BindAction("Equip", IE_Pressed, this, &ABaseCharacter::EquipButtonPressed);
+	PlayerInputComponent->BindAction("Crouch", IE_Pressed, this, &ABaseCharacter::CrouchButtonPressed);
+	PlayerInputComponent->BindAction("Aim", IE_Pressed, this, &ABaseCharacter::AimButtonPressed);
+	PlayerInputComponent->BindAction("Aim", IE_Released, this, &ABaseCharacter::AimButtonReleased);
+}
+
+void ABaseCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+	if (Combat)
+	{
+		Combat->Character = this;
+	}
 }
 
 
@@ -87,6 +107,57 @@ void ABaseCharacter::Turn(float Value)
 void ABaseCharacter::LookUp(float Value)
 {
 	AddControllerPitchInput(Value);
+}
+
+void ABaseCharacter::EquipButtonPressed()
+{
+	if (Combat)
+	{
+		if (HasAuthority())
+		{
+			Combat->EquipWeapon(OverlappingWeapon);
+		}
+		else
+		{
+			ServerEquipButtonPressed();
+		}
+	}
+}
+
+void ABaseCharacter::ServerEquipButtonPressed_Implementation()
+{
+	if (Combat)
+	{
+		Combat->EquipWeapon(OverlappingWeapon);
+	}
+}
+
+void ABaseCharacter::CrouchButtonPressed()
+{
+	if (bIsCrouched)
+	{
+		UnCrouch();
+	}
+	else
+	{
+		Crouch();
+	}
+}
+
+void ABaseCharacter::AimButtonPressed()
+{
+	if (Combat)
+	{
+		Combat->bAiming = true;
+	}
+}
+
+void ABaseCharacter::AimButtonReleased()
+{
+	if (Combat)
+	{
+		Combat->bAiming = false;
+	}
 }
 
 void ABaseCharacter::SetOverlappingWeapon(AWeapon* Weapon)
@@ -121,7 +192,12 @@ void ABaseCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon)
 	
 }
 
+bool ABaseCharacter::IsWeaponEquipped()
+{
+	return (Combat && Combat->EquippedWeapon);
+}
 
-
-
-
+bool ABaseCharacter::IsAiming()
+{
+	return (Combat && Combat->bAiming);
+}
