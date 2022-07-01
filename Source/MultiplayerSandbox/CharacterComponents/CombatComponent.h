@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "MultiplayerSandbox/HUD/BaseHUD.h"
 #include "CombatComponent.generated.h"
 
 #define TRACE_LENGTH 100000.f
@@ -30,6 +31,8 @@ protected:
 	void OnRep_EquippedWeapon();
 
 	void FireButtonPressed(bool bPressed);
+
+	void Fire();
 
 	UFUNCTION(Server, Reliable)
 	void ServerFire(const FVector_NetQuantize& TraceHitTarget);
@@ -60,15 +63,20 @@ private:
 
 	bool bFireButtonPressed;
 
+
+
 	/**
 	* HUD and crosshairs
 	*/
 
 	float CrosshairVelocityFactor; 
 	float CrosshairInAirFactor;
+	float CrosshairAimFactor;
+	float CrosshairShootingFactor;
 
 	FVector HitTarget;
 
+	FHUDPackage HUDPackage;
 	/**
 	* Aiming and FOV
 	*/
@@ -85,7 +93,16 @@ private:
 
 	void InterpFOV(float DeltaTime);
 
-public:	
+	/**
+	* Automatic fire
+	*/
 
-		
+	FTimerHandle FireTimer;
+
+	bool bCanFire = true;
+
+	void StartFireTimer();
+	void FireTimerFinished();
+
+public:	
 };
