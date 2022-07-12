@@ -28,6 +28,9 @@ protected:
 		const FHitResult& Hit
 	);
 
+	UPROPERTY(EditAnywhere)
+	float Damage = 20.f;
+
 private:
 	UPROPERTY(EditAnywhere)
 	class UBoxComponent* CollisionBox;

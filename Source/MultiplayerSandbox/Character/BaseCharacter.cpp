@@ -9,7 +9,9 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "BaseAnimInstance.h"
 #include "MultiplayerSandbox/MultiplayerSandbox.h"
-
+#include "MultiplayerSandbox/PlayerController/BasePlayerController.h"
+#include "MultiplayerSandbox/GameMode/SandboxGameMode.h"
+#include "TimerManager.h"
 
 
 ABaseCharacter::ABaseCharacter()
@@ -45,6 +47,8 @@ ABaseCharacter::ABaseCharacter()
 	TurningInPlace = ETurningInPlace::ETIP_NotTurning;
 	NetUpdateFrequency = 66.f;
 	MinNetUpdateFrequency = 33.f;
+
+	DissolveTimeline = CreateDefaultSubobject<UTimelineComponent>(TEXT("DissolveTimelineComponent"));
 }
 
 void ABaseCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -52,6 +56,7 @@ void ABaseCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME_CONDITION(ABaseCharacter, OverlappingWeapon, COND_OwnerOnly);
+	DOREPLIFETIME(ABaseCharacter, Health);
 }
 
 void ABaseCharacter::OnRep_ReplicatedMovement()
@@ -61,10 +66,70 @@ void ABaseCharacter::OnRep_ReplicatedMovement()
 	TimeSinceLastMovementReplication = 0.f;
 }
 
+void ABaseCharacter::Elim()
+{
+	MulticastElim();
+	GetWorldTimerManager().SetTimer(
+		ElimTimer,
+		this,
+		&ABaseCharacter::ElimTimerFinished,
+		ElimDelay
+	);
+}
+
+void ABaseCharacter::MulticastElim_Implementation()
+{
+	bElimmed = true;
+	PlayElimMontage();
+
+	// Start dissolve effect
+	if (DissolveMaterialInstance)
+	{
+		DynamicDissolveMaterialInstance = UMaterialInstanceDynamic::Create(DissolveMaterialInstance, this);
+		GetMesh()->SetMaterial(0, DynamicDissolveMaterialInstance);
+		DynamicDissolveMaterialInstance->SetScalarParameterValue(TEXT("Dissolve"), 0.55f);
+		DynamicDissolveMaterialInstance->SetScalarParameterValue(TEXT("Glow"), 300.f);
+	}
+	StartDissolve();
+
+	// Disable character movement
+	GetCharacterMovement()->DisableMovement();
+	GetCharacterMovement()->StopMovementImmediately();
+	if (BasePlayerController)
+	{
+		DisableInput(BasePlayerController);
+	}
+
+	// Disable collision
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
+
+void ABaseCharacter::ElimTimerFinished()
+{
+	ASandboxGameMode* SandboxGameMode = GetWorld()->GetAuthGameMode<ASandboxGameMode>();
+	if (SandboxGameMode)
+	{
+		SandboxGameMode->RequestRespawn(this, Controller);
+	}
+}
+
+void ABaseCharacter::OnRep_Health()
+{
+	UpdateHUDHealth();
+	PlayHitReactMontage();
+}
+
 void ABaseCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
+	UpdateHUDHealth();
+
+	if (HasAuthority())
+	{	
+		OnTakeAnyDamage.AddDynamic(this, &ABaseCharacter::ReceiveDamage);
+	}
 }
 
 void ABaseCharacter::Tick(float DeltaTime)
@@ -130,6 +195,24 @@ void ABaseCharacter::PlayFireMontage(bool bAiming)
 	}
 }
 
+void ABaseCharacter::PlayElimMontage()
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance && ElimMontage)
+	{
+		AnimInstance->Montage_Play(ElimMontage);
+	}
+}
+
+void ABaseCharacter::UpdateHUDHealth()
+{
+	BasePlayerController = BasePlayerController == nullptr ? Cast<ABasePlayerController>(Controller) : BasePlayerController;
+	if (BasePlayerController)
+	{
+		BasePlayerController->SetHUDHealth(Health, MaxHealth);
+	}
+}
+
 void ABaseCharacter::PlayHitReactMontage()
 {
 	if (Combat == nullptr || Combat->EquippedWeapon == nullptr) return;
@@ -142,7 +225,6 @@ void ABaseCharacter::PlayHitReactMontage()
 		AnimInstance->Montage_JumpToSection(SectionName);
 	}
 }
-
 
 void ABaseCharacter::MoveForward(float Value)
 {
@@ -344,6 +426,24 @@ void ABaseCharacter::FireButtonReleased()
 	}
 }
 
+void ABaseCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType, AController* InstigatorController, AActor* DamageCauser)
+{
+	Health = FMath::Clamp(Health - Damage, 0.f, MaxHealth);
+	UpdateHUDHealth();
+	PlayHitReactMontage();
+
+	if (Health == 0.f)
+	{
+		ASandboxGameMode* SandboxGameMode = GetWorld()->GetAuthGameMode<ASandboxGameMode>();
+		if (SandboxGameMode)
+		{
+			BasePlayerController = BasePlayerController == nullptr ? Cast<ABasePlayerController>(Controller) : BasePlayerController;
+			ABasePlayerController* AttackerController = Cast<ABasePlayerController>(InstigatorController);
+			SandboxGameMode->PlayerEliminated(this, BasePlayerController, AttackerController);
+		}
+	}
+}
+
 void ABaseCharacter::TurnInPlace(float DeltaTime)
 {
 	if (AO_Yaw > 90.f)
@@ -366,11 +466,6 @@ void ABaseCharacter::TurnInPlace(float DeltaTime)
 	}
 }
 
-void ABaseCharacter::MulticastHit_Implementation()
-{
-	PlayHitReactMontage();
-}
-
 void ABaseCharacter::HideCameraIfCharacterClose()
 {
 	if (!IsLocallyControlled()) return;
@@ -391,6 +486,24 @@ void ABaseCharacter::HideCameraIfCharacterClose()
 		}
 	}
 
+}
+
+void ABaseCharacter::UpdateDissolveMaterial(float DissolveValue)
+{
+	if (DynamicDissolveMaterialInstance)
+	{
+		DynamicDissolveMaterialInstance->SetScalarParameterValue(TEXT("Dissolve"), DissolveValue);
+	}
+}
+
+void ABaseCharacter::StartDissolve()
+{
+	DissolveTrack.BindDynamic(this, &ABaseCharacter::UpdateDissolveMaterial);
+	if (DissolveCurve && DissolveTimeline)
+	{
+		DissolveTimeline->AddInterpFloat(DissolveCurve, DissolveTrack);
+		DissolveTimeline->Play();
+	}
 }
 
 void ABaseCharacter::SetOverlappingWeapon(AWeapon* Weapon)
