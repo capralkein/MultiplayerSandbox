@@ -6,13 +6,24 @@
 #include "MultiplayerSandbox/HUD/CharacterOverlay.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
+#include "MultiplayerSandbox/Character/BaseCharacter.h"
 
 void ABasePlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
 	HUD = Cast<ABaseHUD>(GetHUD());
+}
 
+void ABasePlayerController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+
+	ABaseCharacter* BaseCharacter = Cast<ABaseCharacter>(InPawn);
+	if (BaseCharacter)
+	{
+		SetHUDHealth(BaseCharacter->GetHealth(), BaseCharacter->GetMaxHealth());
+	}
 }
 
 void ABasePlayerController::SetHUDHealth(float Health, float MaxHealth)
@@ -23,7 +34,6 @@ void ABasePlayerController::SetHUDHealth(float Health, float MaxHealth)
 		HUD->CharacterOverlay && 
 		HUD->CharacterOverlay->HealthBar && 
 		HUD->CharacterOverlay->HealthText;
-
 	if (bHUDValid)
 	{
 		const float HealthPercent = Health / MaxHealth;
